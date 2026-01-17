@@ -1,0 +1,11 @@
+# Advanced RAG Lecture - Dependencies
+# Install with: pip install -r requirements.txt
+
+# Mistral AI SDK for embeddings and chat completions
+mistralai>=1.0.0
+
+# NumPy for vector operations and cosine similarity
+numpy>=1.26.0
+
+# Python dotenv for environment variable management
+python-dotenv>=1.0.0
