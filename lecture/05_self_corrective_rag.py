@@ -21,7 +21,6 @@ Run: uv run python lecture/05_self_corrective_rag.py
 """
 
 import os
-import numpy as np
 from dotenv import load_dotenv
 from mistralai import Mistral
 
@@ -29,57 +28,12 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from toy_corpus import DOCS
 
+# Import ChromaDB-backed vector store
+from lecture.vector_store import get_vector_store
+
 load_dotenv()
 
 client = Mistral(api_key=os.environ["MISTRAL_API_KEY"])
-
-
-# =============================================================================
-# EMBEDDING & VECTOR STORE (same as before)
-# =============================================================================
-
-def get_embeddings_batch(texts: list[str]) -> list[list[float]]:
-    """Get embeddings for multiple texts in one API call."""
-    response = client.embeddings.create(
-        model="mistral-embed",
-        inputs=texts
-    )
-    return [item.embedding for item in response.data]
-
-
-def cosine_similarity(vec1: list[float], vec2: list[float]) -> float:
-    """Calculate cosine similarity between two vectors."""
-    a = np.array(vec1)
-    b = np.array(vec2)
-    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
-
-
-class SimpleVectorStore:
-    """Simple in-memory vector store."""
-
-    def __init__(self):
-        self.documents = []
-        self.embeddings = []
-
-    def add_documents(self, docs: list[dict]):
-        texts = [doc["text"] for doc in docs]
-        embeddings = get_embeddings_batch(texts)
-        for doc, embedding in zip(docs, embeddings):
-            self.documents.append(doc)
-            self.embeddings.append(embedding)
-
-    def search(self, query: str, top_k: int = 3) -> list[dict]:
-        query_embedding = get_embeddings_batch([query])[0]
-        results = []
-        for doc, doc_embedding in zip(self.documents, self.embeddings):
-            similarity = cosine_similarity(query_embedding, doc_embedding)
-            results.append({
-                "id": doc["id"],
-                "text": doc["text"],
-                "similarity": similarity
-            })
-        results.sort(key=lambda x: x["similarity"], reverse=True)
-        return results[:top_k]
 
 
 # =============================================================================
@@ -190,7 +144,7 @@ ANSWER:"""
 
 def self_corrective_rag(
     query: str,
-    vector_store: SimpleVectorStore,
+    vector_store,
     max_iterations: int = 3,
     top_k: int = 3,
     verbose: bool = True
@@ -276,9 +230,9 @@ def main():
     print("Self-Corrective RAG with Reflection")
     print("=" * 60)
 
-    # Build vector store
-    print("\n1. Building vector store...")
-    vector_store = SimpleVectorStore()
+    # Build vector store (using ChromaDB)
+    print("\n1. Building vector store with ChromaDB...")
+    vector_store = get_vector_store(collection_name="self_corrective_rag")
     vector_store.add_documents(DOCS)
     print(f"   Indexed {len(DOCS)} documents")
 

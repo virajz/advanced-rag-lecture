@@ -14,7 +14,6 @@ Run: uv run python lecture/03_baseline_rag.py
 """
 
 import os
-import numpy as np
 from dotenv import load_dotenv
 from mistralai import Mistral
 
@@ -23,79 +22,13 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from toy_corpus import DOCS
 
+# Import ChromaDB-backed vector store
+from lecture.vector_store import get_vector_store
+
 load_dotenv()
 
 # Initialize Mistral client
 client = Mistral(api_key=os.environ["MISTRAL_API_KEY"])
-
-
-# =============================================================================
-# EMBEDDING FUNCTIONS
-# =============================================================================
-
-def get_embeddings_batch(texts: list[str]) -> list[list[float]]:
-    """Get embeddings for multiple texts in one API call."""
-    response = client.embeddings.create(
-        model="mistral-embed",
-        inputs=texts
-    )
-    return [item.embedding for item in response.data]
-
-
-def cosine_similarity(vec1: list[float], vec2: list[float]) -> float:
-    """Calculate cosine similarity between two vectors."""
-    a = np.array(vec1)
-    b = np.array(vec2)
-    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
-
-
-# =============================================================================
-# RAG COMPONENTS
-# =============================================================================
-
-class SimpleVectorStore:
-    """
-    A simple in-memory vector store.
-
-    In production, you'd use a real vector DB (Pinecone, Chroma, etc.)
-    but this demonstrates the core concept.
-    """
-
-    def __init__(self):
-        self.documents = []      # Original documents
-        self.embeddings = []     # Their embeddings
-
-    def add_documents(self, docs: list[dict]):
-        """Add documents and compute their embeddings."""
-        texts = [doc["text"] for doc in docs]
-        embeddings = get_embeddings_batch(texts)
-
-        for doc, embedding in zip(docs, embeddings):
-            self.documents.append(doc)
-            self.embeddings.append(embedding)
-
-    def search(self, query: str, top_k: int = 3) -> list[dict]:
-        """
-        Find the top_k most similar documents to the query.
-
-        Returns documents with their similarity scores.
-        """
-        # Embed the query
-        query_embedding = get_embeddings_batch([query])[0]
-
-        # Calculate similarity with all documents
-        results = []
-        for doc, doc_embedding in zip(self.documents, self.embeddings):
-            similarity = cosine_similarity(query_embedding, doc_embedding)
-            results.append({
-                "id": doc["id"],
-                "text": doc["text"],
-                "similarity": similarity
-            })
-
-        # Sort by similarity and return top_k
-        results.sort(key=lambda x: x["similarity"], reverse=True)
-        return results[:top_k]
 
 
 def generate_answer(query: str, contexts: list[dict]) -> str:
@@ -134,15 +67,18 @@ ANSWER:"""
 # MAIN RAG PIPELINE
 # =============================================================================
 
-def baseline_rag(query: str, vector_store: SimpleVectorStore, top_k: int = 3) -> dict:
+def baseline_rag(query: str, vector_store, top_k: int = 1) -> dict:
     """
     Complete RAG pipeline:
     1. Retrieve relevant documents
     2. Generate answer from context
 
     Returns the answer and retrieved contexts for inspection.
+
+    NOTE: We use top_k=1 (just the best match) to demonstrate the naive
+    approach. Real-world RAG needs smarter retrieval strategies.
     """
-    # Step 1: Retrieve
+    # Step 1: Retrieve (naive: just get the single best match)
     contexts = vector_store.search(query, top_k=top_k)
 
     # Step 2: Generate
@@ -160,11 +96,11 @@ def main():
     print("Baseline RAG with Mistral AI")
     print("=" * 60)
 
-    # Step 1: Build the vector store
-    print("\n1. Building vector store...")
+    # Step 1: Build the vector store (using ChromaDB)
+    print("\n1. Building vector store with ChromaDB...")
     print(f"   Indexing {len(DOCS)} documents from toy_corpus.py")
 
-    vector_store = SimpleVectorStore()
+    vector_store = get_vector_store(collection_name="baseline_rag")
     vector_store.add_documents(DOCS)
     print("   Done!")
 

@@ -76,48 +76,50 @@ class QueryDebugInfo:
 
 def route_query(question: str, doc_type: str = "technical") -> tuple[str, str]:
     """
-    Determine which RAG method to use based on query characteristics.
+    Smart query router using LLM to analyze the query and pick the best RAG method.
     Returns (method, reason).
     """
-    words = question.split()
-    is_short = len(words) < 10
-    is_question = "?" in question or any(
-        question.lower().startswith(w) for w in ["how", "what", "why", "when", "where", "who"]
+    prompt = f"""Analyze this query and decide which RAG retrieval method would work best.
+
+QUERY: {question}
+DOCUMENT TYPE: {doc_type}
+
+Available methods:
+1. BASELINE - Direct embedding search. Best for: simple factual queries, queries using exact terminology from documents
+2. HYDE - Generate hypothetical answer first, then search. Best for: vague queries, vocabulary mismatch, when user terms differ from document terms
+3. SELF_CORRECTIVE - Search, reflect if results are sufficient, reformulate if needed. Best for: complex queries needing multiple documents, multi-step answers, queries where first search might miss context
+4. HYBRID - Combine HyDE + self-correction. Best for: difficult queries needing both vocabulary bridging AND multiple retrieval attempts
+
+Consider:
+- Does the query use domain-specific terms that likely match documents? → BASELINE
+- Is the query vague or uses different vocabulary than technical docs? → HYDE
+- Does answering require information from multiple documents? → SELF_CORRECTIVE
+- Is it both vague AND complex? → HYBRID
+
+Respond in this exact format:
+METHOD: <one of: BASELINE, HYDE, SELF_CORRECTIVE, HYBRID>
+REASON: <brief explanation>"""
+
+    response = client.chat.complete(
+        model="mistral-small-latest",
+        messages=[{"role": "user", "content": prompt}]
     )
 
-    # Technical terms for SSL docs
-    has_technical_terms = any(
-        term in question.lower()
-        for term in ["ssl", "tls", "certificate", "port", "https", "pem", "config"]
-    )
+    text = response.choices[0].message.content
 
-    # Story-specific terms
-    has_story_terms = any(
-        term in question.lower()
-        for term in ["elena", "marcus", "ghost protocol", "algorithm", "institute", "quantum", "director", "sarah"]
-    )
+    # Parse response
+    method = "baseline"  # default
+    reason = "Default fallback"
 
-    # Adjust routing based on document type
-    if doc_type == "story":
-        # For stories, prefer HyDE for character/plot questions
-        if any(w in question.lower() for w in ["who", "character", "relationship"]):
-            return "hyde", "Character query - HyDE helps match narrative descriptions"
-        elif any(w in question.lower() for w in ["what happened", "then", "after", "before", "why did"]):
-            return "self_corrective", "Plot/timeline query - self-correction finds related events"
-        elif is_short and is_question:
-            return "hyde", "Short story question - HyDE bridges to narrative style"
-        else:
-            return "baseline", "Detailed story query - direct search works well"
+    for line in text.strip().split("\n"):
+        if line.startswith("METHOD:"):
+            method_str = line.replace("METHOD:", "").strip().lower()
+            if method_str in ["baseline", "hyde", "self_corrective", "hybrid"]:
+                method = method_str
+        elif line.startswith("REASON:"):
+            reason = line.replace("REASON:", "").strip()
 
-    # Technical document routing (original logic)
-    if is_short and is_question and not has_technical_terms:
-        return "hyde", "Short vague question - HyDE bridges vocabulary gap"
-    elif "troubleshoot" in question.lower() or "fix" in question.lower() or "error" in question.lower():
-        return "self_corrective", "Troubleshooting query - self-correction finds specific docs"
-    elif is_short and is_question:
-        return "hybrid", "Short technical question - hybrid approach for best quality"
-    else:
-        return "baseline", "Detailed/technical query - direct embedding works well"
+    return method, reason
 
 
 def generate_hypothetical(question: str, doc_type: str = "technical") -> str:
@@ -226,9 +228,12 @@ def run_rag_query(question: str, vector_store, method: str = "smart", doc_type: 
         debug.routing_reason = f"User selected {method}"
 
     # Execute the appropriate method
+    # Baseline uses top_k=1 (naive approach: just return the best match)
+    # This demonstrates why simple RAG fails for multi-part answers
+    # Advanced methods use smart_search for adaptive retrieval
     if routed_method == "baseline":
         debug.embedding_calls += 1
-        contexts = vector_store.search(question, top_k=3)
+        contexts = vector_store.search(question, top_k=1)  # Naive: only best match
         debug.api_calls += 1
 
     elif routed_method == "hyde":
@@ -238,10 +243,10 @@ def run_rag_query(question: str, vector_store, method: str = "smart", doc_type: 
         debug.hypothetical_doc = hypothetical
         debug.api_calls += 1
 
-        # Embed and search
+        # Embed and search with smart retrieval
         debug.embedding_calls += 1
         hypo_embedding = get_mistral_embeddings([hypothetical])[0]
-        contexts = vector_store.search_with_embedding(hypo_embedding, top_k=3)
+        contexts = vector_store.smart_search_with_embedding(hypo_embedding)
         debug.api_calls += 1
 
     elif routed_method == "self_corrective":
@@ -250,7 +255,7 @@ def run_rag_query(question: str, vector_store, method: str = "smart", doc_type: 
 
         for iteration in range(max_iterations):
             debug.embedding_calls += 1
-            contexts = vector_store.search(current_query, top_k=3)
+            contexts = vector_store.smart_search(current_query)
             debug.api_calls += 1
 
             debug.chat_calls += 1
@@ -281,7 +286,7 @@ def run_rag_query(question: str, vector_store, method: str = "smart", doc_type: 
 
         debug.embedding_calls += 1
         hypo_embedding = get_mistral_embeddings([hypothetical])[0]
-        contexts = vector_store.search_with_embedding(hypo_embedding, top_k=3)
+        contexts = vector_store.smart_search_with_embedding(hypo_embedding)
         debug.api_calls += 1
 
         # Reflect
@@ -303,7 +308,7 @@ def run_rag_query(question: str, vector_store, method: str = "smart", doc_type: 
             debug.api_calls += 1
 
             debug.embedding_calls += 1
-            contexts = vector_store.search(reformulated, top_k=3)
+            contexts = vector_store.smart_search(reformulated)
             debug.api_calls += 1
 
     debug.retrieved_contexts = contexts

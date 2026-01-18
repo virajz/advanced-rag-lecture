@@ -138,6 +138,8 @@ def demo_semantic_search():
         {"id": "doc3", "text": "Python is a popular programming language."},
         {"id": "doc4", "text": "Rotate certificates every 90 days for security."},
         {"id": "doc5", "text": "The weather forecast shows rain tomorrow."},
+        {"id": "doc6", "text": "Guide to set up the SSL."},
+        {"id": "doc7", "text": "How do I set up SSL?"},
     ]
 
     query = "How do I set up SSL?"

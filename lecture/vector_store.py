@@ -163,6 +163,102 @@ class ChromaVectorStore:
 
         return formatted
 
+    def smart_search(
+        self,
+        query: str,
+        min_threshold: float = 0.80,
+        gap_threshold: float = 0.03,
+        max_results: int = 10,
+        min_results: int = 1
+    ) -> list[dict]:
+        """
+        Smart search using threshold + gap detection.
+
+        Instead of fixed top_k, this method:
+        1. Retrieves up to max_results candidates
+        2. Filters by min_threshold (minimum similarity score)
+        3. Detects "gaps" in similarity scores to find natural cutoff points
+
+        Args:
+            query: Search query
+            min_threshold: Minimum similarity score to include (default 0.75)
+            gap_threshold: If similarity drops by more than this between consecutive
+                          docs, stop there (default 0.05 = 5% drop)
+            max_results: Maximum documents to return (default 10)
+            min_results: Minimum documents to return if above threshold (default 1)
+
+        Returns:
+            List of relevant documents with adaptive sizing
+        """
+        query_embedding = get_mistral_embeddings([query])[0]
+        return self.smart_search_with_embedding(
+            query_embedding,
+            min_threshold=min_threshold,
+            gap_threshold=gap_threshold,
+            max_results=max_results,
+            min_results=min_results
+        )
+
+    def smart_search_with_embedding(
+        self,
+        embedding: list[float],
+        min_threshold: float = 0.80,
+        gap_threshold: float = 0.03,
+        max_results: int = 10,
+        min_results: int = 1
+    ) -> list[dict]:
+        """
+        Smart search using a pre-computed embedding (for HyDE).
+
+        Uses threshold + gap detection for adaptive result sizing.
+        """
+        # Fetch more candidates than we might need
+        results = self.collection.query(
+            query_embeddings=[embedding],
+            n_results=max_results,
+            include=["documents", "distances"]
+        )
+
+        if not results["ids"][0]:
+            return []
+
+        # Convert to list of (similarity, doc_info) for processing
+        candidates = []
+        for i in range(len(results["ids"][0])):
+            distance = results["distances"][0][i]
+            similarity = 1 - distance
+            candidates.append({
+                "id": results["ids"][0][i],
+                "text": results["documents"][0][i],
+                "similarity": similarity
+            })
+
+        # Apply smart filtering
+        filtered = []
+        prev_similarity = None
+
+        for i, doc in enumerate(candidates):
+            # Check minimum threshold
+            if doc["similarity"] < min_threshold:
+                break
+
+            # Check for gap (significant drop in similarity)
+            if prev_similarity is not None:
+                gap = prev_similarity - doc["similarity"]
+                if gap > gap_threshold and len(filtered) >= min_results:
+                    break
+
+            filtered.append(doc)
+            prev_similarity = doc["similarity"]
+
+        # Ensure we return at least min_results if available above threshold
+        if len(filtered) < min_results:
+            for doc in candidates[:min_results]:
+                if doc not in filtered and doc["similarity"] >= min_threshold:
+                    filtered.append(doc)
+
+        return filtered
+
     def search_with_embedding(self, embedding: list[float], top_k: int = 3) -> list[dict]:
         """
         Search using a pre-computed embedding (for HyDE).
@@ -234,11 +330,21 @@ if __name__ == "__main__":
 
     print(f"\nDocument count after add: {store.count()}")
 
-    print("\nSearching for 'SSL configuration'...")
-    results = store.search("How do I configure SSL?", top_k=3)
+    query = "How do I configure SSL for production?"
 
+    print(f"\n{'='*50}")
+    print("COMPARISON: Fixed top_k vs Smart Search")
+    print(f"{'='*50}")
+
+    print(f"\n--- Fixed top_k=3 (old method) ---")
+    results = store.search(query, top_k=3)
     for r in results:
-        print(f"  [{r['id']}] (sim={r['similarity']:.4f})")
-        print(f"    {r['text'][:60]}...")
+        print(f"  [{r['id']}] (sim={r['similarity']:.3f}) {r['text'][:50]}...")
 
+    print(f"\n--- Smart Search (threshold + gap detection) ---")
+    smart_results = store.smart_search(query)
+    for r in smart_results:
+        print(f"  [{r['id']}] (sim={r['similarity']:.3f}) {r['text'][:50]}...")
+
+    print(f"\nResults: Fixed={len(results)}, Smart={len(smart_results)}")
     print("\nDone!")

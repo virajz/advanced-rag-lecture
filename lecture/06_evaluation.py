@@ -24,23 +24,17 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from toy_corpus import DOCS
 
+# Import ChromaDB-backed vector store
+from lecture.vector_store import get_vector_store, get_mistral_embeddings
+
 load_dotenv()
 
 client = Mistral(api_key=os.environ["MISTRAL_API_KEY"])
 
 
 # =============================================================================
-# EMBEDDING FUNCTIONS
+# HELPER FUNCTIONS
 # =============================================================================
-
-def get_embeddings_batch(texts: list[str]) -> list[list[float]]:
-    """Get embeddings for multiple texts in one API call."""
-    response = client.embeddings.create(
-        model="mistral-embed",
-        inputs=texts
-    )
-    return [item.embedding for item in response.data]
-
 
 def cosine_similarity(vec1: list[float], vec2: list[float]) -> float:
     """Calculate cosine similarity between two vectors."""
@@ -211,7 +205,7 @@ Respond with ONLY one word: FULLY, PARTIALLY, or NOT."""
         llm_score = 0.0
 
     # Embedding similarity as secondary signal
-    embeddings = get_embeddings_batch([question, answer])
+    embeddings = get_mistral_embeddings([question, answer])
     embedding_similarity = cosine_similarity(embeddings[0], embeddings[1])
 
     # Combine scores (weighted average)
@@ -246,29 +240,8 @@ def evaluate_rag_response(question: str, contexts: list[dict], answer: str) -> d
 
 
 # =============================================================================
-# SIMPLE VECTOR STORE & RAG (for testing)
+# RAG HELPER (for testing)
 # =============================================================================
-
-class SimpleVectorStore:
-    def __init__(self):
-        self.documents = []
-        self.embeddings = []
-
-    def add_documents(self, docs: list[dict]):
-        texts = [doc["text"] for doc in docs]
-        embeddings = get_embeddings_batch(texts)
-        for doc, embedding in zip(docs, embeddings):
-            self.documents.append(doc)
-            self.embeddings.append(embedding)
-
-    def search(self, query: str, top_k: int = 3) -> list[dict]:
-        query_embedding = get_embeddings_batch([query])[0]
-        results = []
-        for doc, doc_embedding in zip(self.documents, self.embeddings):
-            similarity = cosine_similarity(query_embedding, doc_embedding)
-            results.append({"id": doc["id"], "text": doc["text"], "similarity": similarity})
-        results.sort(key=lambda x: x["similarity"], reverse=True)
-        return results[:top_k]
 
 
 def generate_answer(query: str, contexts: list[dict]) -> str:
@@ -321,9 +294,9 @@ def main():
     print("RAG Evaluation Metrics")
     print("=" * 60)
 
-    # Build vector store
-    print("\n1. Building vector store...")
-    vector_store = SimpleVectorStore()
+    # Build vector store (using ChromaDB)
+    print("\n1. Building vector store with ChromaDB...")
+    vector_store = get_vector_store(collection_name="evaluation_rag")
     vector_store.add_documents(DOCS)
 
     # Test Case 1: Good RAG response
